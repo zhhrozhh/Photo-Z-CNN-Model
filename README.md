@@ -23,16 +23,8 @@ VGG stem (cheap 64→16 downsample) + 3 lightweight **Inception** modules (multi
 → GlobalAveragePooling → a 64-d **`embedding`** (this is what feeds the fusion head later) → `z`.
 ~288K params. See KB *CNN architectures — VGG vs Inception* (MCM-A-18).
 
-## The bar to beat
-| | σ_MAD | notes |
-|---|---|---|
-| tabular baseline | **0.0133** | the number images must beat to add value |
-| example CNN (~288K params) | ~0.027 @ 10k | small-data sanity run; improves with more data |
-| Pasquet 2019 (27M params, ~500k galaxies) | 0.0091 | the published benchmark |
-
-Image-only at small N usually trails the tabular baseline — expected. The endgame is the **fusion
-model** (this CNN's `embedding` + the tabular base models → an MLP head), where the image branch adds
-complementary morphology/neighbour information on top of colors.
+The endgame is the **fusion model** (this CNN's `embedding` + the tabular base models → an MLP head),
+where the image branch adds complementary morphology/neighbour information on top of colors.
 
 ## Pointers (Macrocosm KB)
 - **CNN architectures — VGG vs Inception** (MCM-A-18) — the design rationale.
