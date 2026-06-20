@@ -21,7 +21,8 @@ from tensorflow.keras import regularizers
 
 import eval as ev
 from eval import (SHARD, DEFAULT_TRAIN_CSV, is_train_subset, sigma_mad, outlier_rate,
-                  evaluate, val_predictions, outliers_from_df, BAND_P99, make_np_preprocess)
+                  evaluate, val_predictions, outliers_from_df, BAND_P99, BAND_SKY_SIGMA,
+                  BAND_COLOR_SCALE, make_np_preprocess, preproc_channels)
 
 MLFLOW_URI = "https://146-148-10-86.sslip.io"
 
@@ -73,8 +74,12 @@ def make_preprocess(mode="zscore", scale=1000.0):
       'div'    x / scale                    — linear unit rescale; keeps flux & color
       'sqrt'   sign(x) * sqrt(|x| / scale)  — signed sqrt; compresses range, keeps sign & color
       'p99'    x / per-band p99             — fixed per-band rescale, each band's p99 ~ 1
-    'div'/'sqrt'/'p99' don't subtract a per-image mean, so the flux zero-point (color) survives."""
+      'color-feat+p99'  5 p99 bands + 4 asinh colours (z-i,i-r,r-g,g-u) -> 9 channels; the colours
+               are asinh(x/sky_sigma) differences = the nonlinear (log-like) colour a conv can't form.
+    'div'/'sqrt'/'p99'/'color-feat+p99' don't subtract a per-image mean, so the colour survives."""
     p99 = tf.constant(BAND_P99, tf.float32)
+    sig = tf.constant(BAND_SKY_SIGMA, tf.float32)
+    cscale = tf.constant(BAND_COLOR_SCALE, tf.float32)
 
     def fn(x, y):
         x = tf.cast(x, tf.float32)
@@ -85,6 +90,11 @@ def make_preprocess(mode="zscore", scale=1000.0):
             return tf.sign(x) * tf.sqrt(tf.abs(x)), y
         if mode == "p99":
             return x / p99, y
+        if mode == "color-feat+p99":          # 5 p99 bands + 4 asinh colours (z-i,i-r,r-g,g-u) -> 9 ch
+            am = tf.math.asinh(x / sig)        # asinh-mag per band (handles negatives)
+            colors = tf.stack([am[..., 4] - am[..., 3], am[..., 3] - am[..., 2],
+                               am[..., 2] - am[..., 1], am[..., 1] - am[..., 0]], axis=-1)
+            return tf.concat([x / p99, colors / cscale], axis=-1), y
         x = tf.math.asinh(x)                  # 'zscore' (original)
         m = tf.reduce_mean(x, axis=[1, 2], keepdims=True)
         s = tf.math.reduce_std(x, axis=[1, 2], keepdims=True) + 1e-6
@@ -236,7 +246,7 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
     Xes, _ = load_into_ram(es_idx, crop, data_dir, z_all); zes = z_all[es_idx]
     print(f'train {Xtr.shape} ({Xtr.nbytes / 1e9:.1f} GB float16)')
 
-    model = compile_model(build_cnn((crop, crop, 5), l2=l2, drop=drop), lr=lr)
+    model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop), lr=lr)
     train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch, preprocess=pp_tf)
     es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512, preprocess=pp_tf)
     config = dict(crop=crop, batch=batch, lr=lr, epochs=epochs, l2=l2, drop=drop, seed=seed,

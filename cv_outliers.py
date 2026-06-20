@@ -100,7 +100,7 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=
         train_pos = np.concatenate([folds[j] for j in range(N_FOLDS) if j != k])
         es_pos, fit_pos = train_pos[:es_size], train_pos[es_size:]
         print(f"\n=== fold {k + 1}/{N_FOLDS} (run '{seed}-{k}'): train {len(fit_pos):,} | held-out {len(test_pos):,} ===")
-        model = compile_model(build_cnn((crop, crop, 5)), lr=lr)
+        model = compile_model(build_cnn((crop, crop, ev.preproc_channels(preproc))), lr=lr)
         es_ds = _subset_ds(Xall, yall, es_pos, training=False, batch=512, preprocess=pp)
 
         ctx = mlflow.start_run(run_name=f"{seed}-{k}") if use_mlflow else nullcontext()
@@ -142,7 +142,8 @@ if __name__ == "__main__":
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--mlflow-token", default=None, help="MLflow API token")
     p.add_argument("--experiment", default=EXPERIMENT, help=f"MLflow experiment name (default '{EXPERIMENT}')")
-    p.add_argument("--preproc", default="zscore", choices=["zscore", "div", "sqrt", "p99"],
+    p.add_argument("--preproc", default="zscore",
+                   choices=["zscore", "div", "sqrt", "p99", "color-feat+p99"],
                    help="input preprocessing (default zscore)")
     p.add_argument("--preproc-scale", type=float, default=1000.0)
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")

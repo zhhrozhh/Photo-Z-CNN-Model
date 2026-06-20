@@ -24,7 +24,15 @@ SHARD = 6000
 # Set env CUTOUT_SIZE=24 when training on v3.
 SRC_SIZE = int(os.environ.get("CUTOUT_SIZE", 64))
 OUTLIER_THR = 0.05
-BAND_P99 = [0.231, 0.865, 1.955, 2.949, 4.012]   # u,g,r,i,z 99th-pct over the 600k v3 sample
+BAND_P99 = [0.232, 0.870, 1.961, 2.965, 4.027]       # u,g,r,i,z 99th-pct over the 550k train set (v3)
+BAND_SKY_SIGMA = [0.051, 0.042, 0.085, 0.123, 0.218] # u,g,r,i,z sky noise (sigma-clip) over 550k train
+BAND_COLOR_SCALE = [1.400, 0.748, 0.929, 2.817]      # |p99| of asinh colours z-i,i-r,r-g,g-u (550k train)
+PREPROC_CHANNELS = {"color-feat+p99": 9}             # modes that change the channel count (else 5)
+
+
+def preproc_channels(mode):
+    """Number of input channels the network sees for a given preprocessing mode."""
+    return PREPROC_CHANNELS.get(mode, 5)
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_VAL_CSV = os.path.join(_HERE, "splits", "val_objids.csv")
 DEFAULT_TRAIN_CSV = os.path.join(_HERE, "splits", "train_objids.csv")
@@ -46,6 +54,8 @@ def make_np_preprocess(mode="zscore", scale=1000.0):
     'zscore' arcsinh + per-image per-channel std | 'div' x/scale | 'sqrt' sign*sqrt(|x|/scale)
     | 'p99' x / per-band p99."""
     p99 = np.asarray(BAND_P99, "float32")
+    sig = np.asarray(BAND_SKY_SIGMA, "float32")
+    cscale = np.asarray(BAND_COLOR_SCALE, "float32")
 
     def fn(arr):
         a = np.asarray(arr, dtype="float32")
@@ -56,6 +66,11 @@ def make_np_preprocess(mode="zscore", scale=1000.0):
             return np.sign(a) * np.sqrt(np.abs(a))
         if mode == "p99":
             return a / p99
+        if mode == "color-feat+p99":           # 5 p99 bands + 4 asinh colours (z-i,i-r,r-g,g-u) -> 9 ch
+            am = np.arcsinh(a / sig)           # asinh-mag per band (handles negatives)
+            colors = np.stack([am[..., 4] - am[..., 3], am[..., 3] - am[..., 2],
+                               am[..., 2] - am[..., 1], am[..., 1] - am[..., 0]], axis=-1)
+            return np.concatenate([a / p99, colors / cscale], axis=-1)
         a = np.arcsinh(a)                      # 'zscore' (original)
         m = a.mean(axis=(1, 2), keepdims=True)
         s = a.std(axis=(1, 2), keepdims=True) + 1e-6
