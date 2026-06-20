@@ -71,7 +71,7 @@ def _save_outliers_to_gcs(df, out_gcs, seed):
 
 
 def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=5000,
-        patience=8, train_csv=DEFAULT_TRAIN_CSV, mlflow_token=None,
+        patience=8, train_csv=DEFAULT_TRAIN_CSV, mlflow_token=None, experiment=EXPERIMENT,
         out_gcs="gs://macrocosm-lewagon/results/cv_outliers"):
     cat, z_all, o2i = load_catalog(data_dir)
     objid_all = cat['objid'].values
@@ -82,7 +82,7 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=
     Xall, yall = load_into_ram(rows, crop, data_dir, z_all)            # yall = log1p(z), aligned with Xall
     print(f"  {Xall.shape}  ({Xall.nbytes / 1e9:.1f} GB float16)")
 
-    use_mlflow = setup_mlflow(mlflow_token, experiment=EXPERIMENT)     # autolog + experiment "oa"
+    use_mlflow = setup_mlflow(mlflow_token, experiment=experiment)     # autolog + experiment (default "oa")
     if use_mlflow:
         import mlflow
 
@@ -136,8 +136,9 @@ if __name__ == "__main__":
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--epochs", type=int, default=50)
-    p.add_argument("--mlflow-token", default=None, help="MLflow API token (logs to experiment 'oa')")
+    p.add_argument("--mlflow-token", default=None, help="MLflow API token")
+    p.add_argument("--experiment", default=EXPERIMENT, help=f"MLflow experiment name (default '{EXPERIMENT}')")
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")
     a = p.parse_args()
     run(seed=a.seed, data_dir=a.data_dir, crop=a.crop, N=a.N, batch=a.batch,
-        lr=a.lr, epochs=a.epochs, mlflow_token=a.mlflow_token, out_gcs=a.out)
+        lr=a.lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment, out_gcs=a.out)
