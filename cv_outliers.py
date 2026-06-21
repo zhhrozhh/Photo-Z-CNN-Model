@@ -73,7 +73,7 @@ def _save_outliers_to_gcs(df, out_gcs, seed):
 
 def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=5000,
         patience=8, train_csv=DEFAULT_TRAIN_CSV, mlflow_token=None, experiment=EXPERIMENT,
-        preproc='zscore', preproc_scale=1000.0,
+        preproc='zscore', preproc_scale=1000.0, arch=None,
         out_gcs="gs://macrocosm-lewagon/results/cv_outliers"):
     pp = make_preprocess(preproc, preproc_scale)
     cat, z_all, o2i = load_catalog(data_dir)
@@ -100,7 +100,7 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=
         train_pos = np.concatenate([folds[j] for j in range(N_FOLDS) if j != k])
         es_pos, fit_pos = train_pos[:es_size], train_pos[es_size:]
         print(f"\n=== fold {k + 1}/{N_FOLDS} (run '{seed}-{k}'): train {len(fit_pos):,} | held-out {len(test_pos):,} ===")
-        model = compile_model(build_cnn((crop, crop, ev.preproc_channels(preproc))), lr=lr)
+        model = compile_model(build_cnn((crop, crop, ev.preproc_channels(preproc)), arch=arch), lr=lr)
         es_ds = _subset_ds(Xall, yall, es_pos, training=False, batch=512, preprocess=pp)
 
         ctx = mlflow.start_run(run_name=f"{seed}-{k}") if use_mlflow else nullcontext()
@@ -108,7 +108,7 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=
             if use_mlflow:
                 mlflow.log_params(dict(seed=seed, fold=k, n_folds=N_FOLDS, crop=crop, batch=batch,
                                        lr=lr, epochs=epochs, preproc=preproc, preproc_scale=preproc_scale,
-                                       n_train=len(fit_pos), n_test=len(test_pos)))
+                                       arch=(arch or 'default'), n_train=len(fit_pos), n_test=len(test_pos)))
             model.fit(_subset_ds(Xall, yall, fit_pos, training=True, batch=batch, preprocess=pp),
                       validation_data=es_ds, epochs=epochs,
                       callbacks=make_callbacks(es_ds, zrow[es_pos], patience))
@@ -146,8 +146,10 @@ if __name__ == "__main__":
                    choices=["zscore", "div", "sqrt", "p99", "color-feat+p99"],
                    help="input preprocessing (default zscore)")
     p.add_argument("--preproc-scale", type=float, default=1000.0)
+    p.add_argument("--arch", default=None, choices=[None, "default", "side-e1"],
+                   help="model architecture (default = trunk only; 'side-e1' adds the side branch)")
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")
     a = p.parse_args()
     run(seed=a.seed, data_dir=a.data_dir, crop=a.crop, N=a.N, batch=a.batch,
         lr=a.lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment,
-        preproc=a.preproc, preproc_scale=a.preproc_scale, out_gcs=a.out)
+        preproc=a.preproc, preproc_scale=a.preproc_scale, arch=a.arch, out_gcs=a.out)

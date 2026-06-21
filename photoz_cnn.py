@@ -40,7 +40,27 @@ def inception(x, f1, f3r, f3, f5r, f5, fp, name, reg=None):
     return L.Concatenate(axis=-1, name=f'{name}_concat')([b1, b3, b5, bp])
 
 
-def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1):
+def _side_e1(inp, reg=None):
+    """Position-aware side branch (arch='side-e1'): a valid-conv tower with stride-1 max
+    filters (local shift tolerance), one stride-2 downsample, ending in GlobalMaxPool ->
+    256-vec (translation-robust), concatenated at the head before the z output.
+    Assumes >=24px input. NB heavy: ~394k params (c6/c7 dominate), > the main trunk."""
+    C = lambda n, k, p, nm: L.Conv2D(n, k, padding=p, activation='relu', kernel_regularizer=reg, name=nm)
+    s = L.MaxPool2D(3, strides=1, padding='valid', name='se1_m1')(inp)     # 24->22
+    s = C(4, 3, 'valid', 'se1_c1')(s)                                       # 22->20
+    s = C(8, 3, 'valid', 'se1_c2')(s)                                       # 20->18
+    s = L.MaxPool2D(3, strides=1, padding='valid', name='se1_m2')(s)        # 18->16
+    s = C(16, 3, 'valid', 'se1_c3')(s)                                      # 16->14
+    s = C(32, 3, 'valid', 'se1_c4')(s)                                      # 14->12
+    s = L.MaxPool2D(3, strides=1, padding='valid', name='se1_m3')(s)        # 12->10
+    s = C(64, 3, 'valid', 'se1_c5')(s)                                      # 10->8
+    s = C(128, 3, 'valid', 'se1_c6')(s)                                     # 8->6
+    s = L.MaxPool2D(2, strides=2, padding='valid', name='se1_m4')(s)        # 6->3
+    s = C(256, 3, 'same', 'se1_c7')(s)                                      # 3->3 (keep map for GMP)
+    return L.GlobalMaxPooling2D(name='se1_gmp')(s)                          # -> 256
+
+
+def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None):
     reg = regularizers.l2(l2) if l2 else None
     inp = Input(shape=input_shape, name='cutout')
     x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(inp)
@@ -58,8 +78,11 @@ def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1):
     x = L.Dropout(drop, name='dropout')(x)
     emb = L.Dense(embed_dim, activation='relu', kernel_regularizer=reg, name='embedding')(x)
     x = L.Dropout(drop, name='embedding_drop')(emb)
+    if arch == 'side-e1':                       # concat the side branch before the z output
+        x = L.Concatenate(name='head_concat')([x, _side_e1(inp, reg)])
     zout = L.Dense(1, name='z')(x)
-    return Model(inp, zout, name='photoz_cnn')
+    nm = 'photoz_cnn' + (f'-{arch}' if arch and arch != 'default' else '')
+    return Model(inp, zout, name=nm)
 
 
 def build_embedder(cnn):
@@ -231,7 +254,7 @@ def compile_model(model, lr=3e-4):
 # ============================== entry point ==============================
 def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_size=5000,
           batch=256, lr=3e-4, epochs=50, l2=1e-4, drop=0.4, patience=8,
-          preproc='zscore', preproc_scale=1000.0,
+          preproc='zscore', preproc_scale=1000.0, arch=None,
           run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI):
     """Load data into RAM, train, evaluate on the fixed 50k val, and (if a token is given) log
     everything to MLflow — INCLUDING the outlier objids on the 50k as artifacts. Returns (metrics, model).
@@ -246,13 +269,13 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
     Xes, _ = load_into_ram(es_idx, crop, data_dir, z_all); zes = z_all[es_idx]
     print(f'train {Xtr.shape} ({Xtr.nbytes / 1e9:.1f} GB float16)')
 
-    model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop), lr=lr)
+    model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop, arch=arch), lr=lr)
     train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch, preprocess=pp_tf)
     es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512, preprocess=pp_tf)
     config = dict(crop=crop, batch=batch, lr=lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
                   optimizer='adam', loss='huber(0.02)', target='log1p(z)',
                   preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
-                  arch='vgg-stem+3inception',
+                  arch=(arch or 'default'),
                   train_csv=str(train_csv), n_train=len(train_idx), params=int(model.count_params()))
 
     def _fit_eval():
