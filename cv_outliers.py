@@ -71,7 +71,7 @@ def _save_outliers_to_gcs(df, out_gcs, seed):
     return dst
 
 
-def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=5000,
+def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, min_lr=1e-5, epochs=50, es_size=5000,
         patience=8, train_csv=DEFAULT_TRAIN_CSV, mlflow_token=None, experiment=EXPERIMENT,
         preproc='zscore', preproc_scale=1000.0, arch=None,
         out_gcs="gs://macrocosm-lewagon/results/cv_outliers"):
@@ -107,11 +107,11 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=
         with ctx:
             if use_mlflow:
                 mlflow.log_params(dict(seed=seed, fold=k, n_folds=N_FOLDS, crop=crop, batch=batch,
-                                       lr=lr, epochs=epochs, preproc=preproc, preproc_scale=preproc_scale,
+                                       lr=lr, min_lr=min_lr, epochs=epochs, preproc=preproc, preproc_scale=preproc_scale,
                                        arch=(arch or 'default'), n_train=len(fit_pos), n_test=len(test_pos)))
             model.fit(_subset_ds(Xall, yall, fit_pos, training=True, batch=batch, preprocess=pp),
                       validation_data=es_ds, epochs=epochs,
-                      callbacks=make_callbacks(es_ds, zrow[es_pos], patience))
+                      callbacks=make_callbacks(es_ds, zrow[es_pos], patience, min_lr))
             zpred[test_pos] = _predict_subset(model, Xall, test_pos, preprocess=pp)
             foldid[test_pos] = k
             if use_mlflow:
@@ -139,6 +139,7 @@ if __name__ == "__main__":
     p.add_argument("--N", type=int, default=None, help="cap #train objects (debug); default = all")
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--min-lr", type=float, default=1e-5, help="ReduceLROnPlateau floor")
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--mlflow-token", default=None, help="MLflow API token")
     p.add_argument("--experiment", default=EXPERIMENT, help=f"MLflow experiment name (default '{EXPERIMENT}')")
@@ -151,5 +152,5 @@ if __name__ == "__main__":
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")
     a = p.parse_args()
     run(seed=a.seed, data_dir=a.data_dir, crop=a.crop, N=a.N, batch=a.batch,
-        lr=a.lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment,
+        lr=a.lr, min_lr=a.min_lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment,
         preproc=a.preproc, preproc_scale=a.preproc_scale, arch=a.arch, out_gcs=a.out)
