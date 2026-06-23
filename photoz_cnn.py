@@ -61,7 +61,7 @@ def _side_e1(inp, reg=None):
     return L.GlobalMaxPooling2D(name='se1_gmp')(s)                          # -> 256
 
 
-VALID_ARCHS = (None, 'default', 'side-e1')
+VALID_ARCHS = (None, 'default', 'side-e1', 'extend')
 
 
 def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None, mdn=0):
@@ -70,20 +70,39 @@ def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, ar
                          f"(None/'default' = trunk only)")
     reg = regularizers.l2(l2) if l2 else None
     inp = Input(shape=input_shape, name='cutout')
-    x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(inp)
-    x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1b')(x)
-    x = L.BatchNormalization(name='stem1_bn')(x); x = L.MaxPool2D(name='stem1_pool')(x)
-    x = L.Conv2D(64, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem2')(x)
-    x = L.BatchNormalization(name='stem2_bn')(x); x = L.MaxPool2D(name='stem2_pool')(x)
-    x = inception(x, 32, 32, 48, 8, 24, 24, name='inc1', reg=reg); x = L.BatchNormalization(name='inc1_bn')(x)
-    x = L.SpatialDropout2D(spatial_drop, name='inc1_sdrop')(x); x = L.MaxPool2D(name='inc1_down')(x)
-    x = inception(x, 64, 48, 96, 16, 48, 48, name='inc2', reg=reg); x = L.BatchNormalization(name='inc2_bn')(x)
-    x = L.SpatialDropout2D(spatial_drop, name='inc2_sdrop')(x)
-    x = inception(x, 64, 48, 96, 16, 48, 48, name='inc3', reg=reg); x = L.BatchNormalization(name='inc3_bn')(x)
-    x = L.GlobalAveragePooling2D(name='gap')(x)
-    x = L.Dense(128, activation='relu', kernel_regularizer=reg, name='dense')(x)
-    x = L.Dropout(drop, name='dropout')(x)
-    emb = L.Dense(embed_dim, activation='relu', kernel_regularizer=reg, name='embedding')(x)
+    if arch == 'extend':                        # wider stems + wider inceptions + 2 extra inception blocks
+        x = L.Conv2D(48, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(inp)
+        x = L.Conv2D(48, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1b')(x)
+        x = L.BatchNormalization(name='stem1_bn')(x); x = L.MaxPool2D(name='stem1_pool')(x)
+        x = L.Conv2D(96, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem2')(x)
+        x = L.BatchNormalization(name='stem2_bn')(x); x = L.MaxPool2D(name='stem2_pool')(x)
+        x = inception(x, 48, 48, 72, 12, 36, 36, name='inc1', reg=reg); x = L.BatchNormalization(name='inc1_bn')(x)
+        x = L.SpatialDropout2D(spatial_drop, name='inc1_sdrop')(x); x = L.MaxPool2D(name='inc1_down')(x)
+        x = inception(x, 96, 64, 128, 24, 64, 64, name='inc2', reg=reg); x = L.BatchNormalization(name='inc2_bn')(x)
+        x = L.SpatialDropout2D(spatial_drop, name='inc2_sdrop')(x)
+        x = inception(x, 96, 64, 128, 24, 64, 64, name='inc3', reg=reg); x = L.BatchNormalization(name='inc3_bn')(x)
+        x = inception(x, 128, 96, 160, 32, 80, 80, name='inc4', reg=reg); x = L.BatchNormalization(name='inc4_bn')(x)
+        x = L.SpatialDropout2D(spatial_drop, name='inc4_sdrop')(x)
+        x = inception(x, 128, 96, 160, 32, 80, 80, name='inc5', reg=reg); x = L.BatchNormalization(name='inc5_bn')(x)
+        x = L.GlobalAveragePooling2D(name='gap')(x)
+        x = L.Dense(256, activation='relu', kernel_regularizer=reg, name='dense')(x)
+        x = L.Dropout(drop, name='dropout')(x)
+        emb = L.Dense(embed_dim, activation='relu', kernel_regularizer=reg, name='embedding')(x)
+    else:
+        x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(inp)
+        x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1b')(x)
+        x = L.BatchNormalization(name='stem1_bn')(x); x = L.MaxPool2D(name='stem1_pool')(x)
+        x = L.Conv2D(64, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem2')(x)
+        x = L.BatchNormalization(name='stem2_bn')(x); x = L.MaxPool2D(name='stem2_pool')(x)
+        x = inception(x, 32, 32, 48, 8, 24, 24, name='inc1', reg=reg); x = L.BatchNormalization(name='inc1_bn')(x)
+        x = L.SpatialDropout2D(spatial_drop, name='inc1_sdrop')(x); x = L.MaxPool2D(name='inc1_down')(x)
+        x = inception(x, 64, 48, 96, 16, 48, 48, name='inc2', reg=reg); x = L.BatchNormalization(name='inc2_bn')(x)
+        x = L.SpatialDropout2D(spatial_drop, name='inc2_sdrop')(x)
+        x = inception(x, 64, 48, 96, 16, 48, 48, name='inc3', reg=reg); x = L.BatchNormalization(name='inc3_bn')(x)
+        x = L.GlobalAveragePooling2D(name='gap')(x)
+        x = L.Dense(128, activation='relu', kernel_regularizer=reg, name='dense')(x)
+        x = L.Dropout(drop, name='dropout')(x)
+        emb = L.Dense(embed_dim, activation='relu', kernel_regularizer=reg, name='embedding')(x)
     x = L.Dropout(drop, name='embedding_drop')(emb)
     if arch == 'side-e1':                       # concat the side branch before the z output
         x = L.Concatenate(name='head_concat')([x, _side_e1(inp, reg)])
@@ -296,7 +315,7 @@ def ssl_pretrain(model, X, preprocess, epochs=5, mask_frac=0.5, mask_block=4, ba
     conv weights (the decoder is discarded). Trains on whatever images you pass (can be more than
     the labelled set)."""
     C = model.input_shape[-1]
-    d = model.get_layer('inc3_bn').output                       # encoder feature map (input/8)
+    d = model.get_layer('gap').input                            # encoder feature map (input/8), any arch
     for f in (64, 32, 16):                                      # 3 x stride-2 upsample -> back to input size
         d = L.Conv2DTranspose(f, 3, strides=2, padding='same', activation='relu')(d)
     recon = L.Conv2D(C, 3, padding='same', name='ssl_recon')(d)
