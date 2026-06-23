@@ -261,10 +261,12 @@ def compile_model(model, lr=3e-4):
 def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_size=5000,
           batch=256, lr=3e-4, min_lr=1e-5, epochs=50, l2=1e-4, drop=0.4, patience=8,
           preproc='zscore', preproc_scale=1000.0, arch=None,
-          run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI):
-    """Load data into RAM, train, evaluate on the fixed 50k val, and (if a token is given) log
-    everything to MLflow — INCLUDING the outlier objids on the 50k as artifacts. Returns (metrics, model).
-    preproc: 'zscore'|'div'|'sqrt'|'p99' (same transform is used for training AND the 50k eval)."""
+          run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI,
+          val_csv=ev.DEFAULT_VAL_CSV):
+    """Load data into RAM, train, evaluate on the val set (val_csv; default the fixed 50k), and (if a
+    token is given) log everything to MLflow — INCLUDING the outlier objids on it as artifacts.
+    Returns (metrics, model).
+    preproc: 'zscore'|'div'|'sqrt'|'p99' (same transform is used for training AND the eval)."""
     pp_tf = make_preprocess(preproc, preproc_scale)          # training (tf.data)
     pp_np = make_np_preprocess(preproc, preproc_scale)       # eval (numpy) — kept in sync
     _, z_all, o2i = load_catalog(data_dir)
@@ -282,11 +284,12 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
                   optimizer='adam', loss='huber(0.02)', target='log1p(z)',
                   preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
                   arch=(arch or 'default'),
-                  train_csv=str(train_csv), n_train=len(train_idx), params=int(model.count_params()))
+                  train_csv=str(train_csv), val_csv=str(val_csv),
+                  n_train=len(train_idx), params=int(model.count_params()))
 
     def _fit_eval():
         model.fit(train_ds, validation_data=es_ds, epochs=epochs, callbacks=make_callbacks(es_ds, zes, patience, min_lr))
-        valdf = val_predictions(model, data_dir=data_dir, crop=crop, preprocess=pp_np)   # per-object on fixed 50k
+        valdf = val_predictions(model, data_dir=data_dir, val_csv=val_csv, crop=crop, preprocess=pp_np)   # per-object on the val set
         return ev.metrics_from_df(valdf), valdf
 
     if setup_mlflow(mlflow_token, mlflow_uri, experiment):
