@@ -61,7 +61,27 @@ def _side_e1(inp, reg=None):
     return L.GlobalMaxPooling2D(name='se1_gmp')(s)                          # -> 256
 
 
-VALID_ARCHS = (None, 'default', 'side-e1', 'extend')
+def _side_e2(cin, reg=None):
+    """Side branch for arch='side-e2': same valid-conv / GlobalMaxPool tower as side-e1 but fed
+    the 4 arcsinh-colour channels (24x24x4) instead of the 5 bands, and capped with a Dense-64 so
+    it concatenates 1:1 with the trunk's 64-d embedding. Assumes >=24px input."""
+    C = lambda n, k, p, nm: L.Conv2D(n, k, padding=p, activation='relu', kernel_regularizer=reg, name=nm)
+    s = L.MaxPool2D(3, strides=1, padding='valid', name='se2_m1')(cin)      # 24->22
+    s = C(4, 3, 'valid', 'se2_c1')(s)                                       # 22->20
+    s = C(8, 3, 'valid', 'se2_c2')(s)                                       # 20->18
+    s = L.MaxPool2D(3, strides=1, padding='valid', name='se2_m2')(s)        # 18->16
+    s = C(16, 3, 'valid', 'se2_c3')(s)                                      # 16->14
+    s = C(32, 3, 'valid', 'se2_c4')(s)                                      # 14->12
+    s = L.MaxPool2D(3, strides=1, padding='valid', name='se2_m3')(s)        # 12->10
+    s = C(64, 3, 'valid', 'se2_c5')(s)                                      # 10->8
+    s = C(128, 3, 'valid', 'se2_c6')(s)                                     # 8->6
+    s = L.MaxPool2D(2, strides=2, padding='valid', name='se2_m4')(s)        # 6->3
+    s = C(256, 3, 'same', 'se2_c7')(s)                                      # 3->3
+    s = L.GlobalMaxPooling2D(name='se2_gmp')(s)                             # -> 256
+    return L.Dense(64, activation='relu', kernel_regularizer=reg, name='se2_dense')(s)   # -> 64
+
+
+VALID_ARCHS = (None, 'default', 'side-e1', 'side-e2', 'extend')
 
 
 def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None, mdn=0):
@@ -70,8 +90,16 @@ def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, ar
                          f"(None/'default' = trunk only)")
     reg = regularizers.l2(l2) if l2 else None
     inp = Input(shape=input_shape, name='cutout')
+    # side-e2: the input is 9-ch color-feat+p99 [5 p99 bands | 4 arcsinh colours]; the trunk sees the
+    # 5 bands, the side branch sees the 4 colours. Every other arch runs the trunk on the full input.
+    trunk_in = inp
+    if arch == 'side-e2':
+        if input_shape[-1] != 9:
+            raise ValueError(f"arch='side-e2' needs preproc='color-feat+p99' (9 input channels); "
+                             f"got input_shape[-1]={input_shape[-1]}")
+        trunk_in = L.Lambda(lambda t: t[..., :5], name='band_slice')(inp)    # 5 p99 bands -> trunk
     if arch == 'extend':                        # wider stems + wider inceptions + 2 extra inception blocks
-        x = L.Conv2D(48, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(inp)
+        x = L.Conv2D(48, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(trunk_in)
         x = L.Conv2D(48, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1b')(x)
         x = L.BatchNormalization(name='stem1_bn')(x); x = L.MaxPool2D(name='stem1_pool')(x)
         x = L.Conv2D(96, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem2')(x)
@@ -89,7 +117,7 @@ def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, ar
         x = L.Dropout(drop, name='dropout')(x)
         emb = L.Dense(embed_dim, activation='relu', kernel_regularizer=reg, name='embedding')(x)
     else:
-        x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(inp)
+        x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(trunk_in)
         x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1b')(x)
         x = L.BatchNormalization(name='stem1_bn')(x); x = L.MaxPool2D(name='stem1_pool')(x)
         x = L.Conv2D(64, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem2')(x)
@@ -106,6 +134,11 @@ def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, ar
     x = L.Dropout(drop, name='embedding_drop')(emb)
     if arch == 'side-e1':                       # concat the side branch before the z output
         x = L.Concatenate(name='head_concat')([x, _side_e1(inp, reg)])
+    elif arch == 'side-e2':                     # colour side branch (64) + trunk embedding (64) -> 128 -> 64
+        color_in = L.Lambda(lambda t: t[..., 5:], name='color_slice')(inp)   # 4 arcsinh colours -> side
+        x = L.Concatenate(name='head_concat')([x, _side_e2(color_in, reg)])  # 64 + 64 = 128
+        x = L.Dense(64, activation='relu', kernel_regularizer=reg, name='fuse64')(x)
+        x = L.Dropout(drop, name='fuse64_drop')(x)
     if mdn:                                     # mixture-density head: K gaussians [pi, mu, sigma]
         pi = L.Dense(mdn, activation='softmax', name='mdn_pi')(x)
         mu = L.Dense(mdn, name='mdn_mu')(x)

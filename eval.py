@@ -32,8 +32,8 @@ _BAND_P99_BY_SIZE = {
     32: [0.192, 0.687, 1.535, 2.305, 3.141],   # v4.6
 }
 BAND_P99 = _BAND_P99_BY_SIZE.get(SRC_SIZE, _BAND_P99_BY_SIZE[24])
-BAND_SKY_SIGMA = [0.051, 0.042, 0.085, 0.123, 0.218] # u,g,r,i,z sky noise (sigma-clip) over 550k train (v3 — recompute for v4 if using color-feat+p99)
-BAND_COLOR_SCALE = [1.400, 0.748, 0.929, 2.817]      # |p99| of asinh colours z-i,i-r,r-g,g-u (550k train v3 — recompute for v4 if using color-feat+p99)
+BAND_SKY_SIGMA = [0.0511, 0.0405, 0.0781, 0.1173, 0.2681]  # u,g,r,i,z sky noise (sigma-clip std), v4.5/24px train split (554,626)
+BAND_COLOR_SCALE = [1.8008, 1.1198, 1.2863, 2.892]         # |p99| of asinh colours z-i,i-r,r-g,g-u, v4.5/24px train split (554,626)
 PREPROC_CHANNELS = {"color-feat+p99": 9}             # modes that change the channel count (else 5)
 
 

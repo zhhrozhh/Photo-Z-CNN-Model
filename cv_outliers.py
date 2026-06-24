@@ -154,8 +154,8 @@ if __name__ == "__main__":
                    choices=["zscore", "div", "sqrt", "p99", "color-feat+p99"],
                    help="input preprocessing (default zscore)")
     p.add_argument("--preproc-scale", type=float, default=1000.0)
-    p.add_argument("--arch", default=None, choices=[None, "default", "side-e1"],
-                   help="model architecture (default = trunk only; 'side-e1' adds the side branch)")
+    p.add_argument("--arch", default=None, choices=[None, "default", "side-e1", "side-e2", "extend"],
+                   help="model architecture (default = trunk only; 'side-e1'/'side-e2' add the side branch)")
     p.add_argument("--tta", action="store_true", help="test-time augmentation on the OOF predictions (8x slower)")
     p.add_argument("--mdn", type=int, default=0, help="mixture-density head with this many Gaussians (0 = regression)")
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")
