@@ -25,7 +25,7 @@ from eval import (SHARD, DEFAULT_TRAIN_CSV, is_train_subset, sigma_mad, outlier_
                   evaluate, val_predictions, outliers_from_df, BAND_P99, BAND_SKY_SIGMA,
                   BAND_COLOR_SCALE, make_np_preprocess, preproc_channels)
 
-MLFLOW_URI = "https://146-148-10-86.sslip.io"
+MLFLOW_URI = "https://hangman-lab.top/ex-miscs/mlflow"
 
 
 
