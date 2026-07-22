@@ -121,11 +121,33 @@ def _shard_mm(data_dir):
     return {int(re.findall(r"images_(\d+)_", p)[0]) // SHARD: np.load(p, mmap_mode="r") for p in paths}
 
 
+# bin-classification head: N uniform bins over log1p(z) spanning the catalog's z range
+# (v4 quality cut: z in [0.02, 0.35]). Point estimate = probability-weighted mean of bin centers.
+BINS_LO = float(np.log1p(0.02))
+BINS_HI = float(np.log1p(0.35))
+
+
+def bin_centers(n_bins):
+    """Centers of `n_bins` uniform bins over [BINS_LO, BINS_HI] in log1p(z) space."""
+    edges = np.linspace(BINS_LO, BINS_HI, n_bins + 1)
+    return ((edges[:-1] + edges[1:]) / 2).astype("float64")
+
+
+def bins_point(raw):
+    """log1p(z)-space point estimate from a bins-head softmax output (N, n_bins):
+    the expectation sum(p_i * center_i)."""
+    raw = np.asarray(raw, "float64")
+    return raw @ bin_centers(raw.shape[1])
+
+
 def mdn_point(raw):
     """log1p(z)-space point estimate from a model's raw output, auto-detecting the head:
-    regression (N,1) -> the raveled output; MDN (N, 3*K) -> mean of the highest-weight Gaussian.
+    regression (N,1) -> the raveled output; bins softmax (N, >=32) -> expectation over bin
+    centers; MDN (N, 3*K) -> mean of the highest-weight Gaussian.
     Callers apply expm1 themselves (so TTA can average in log1p space)."""
     raw = np.asarray(raw)
+    if raw.ndim == 2 and raw.shape[1] >= 32:                           # bins head (MDN K<=10 = 30 cols)
+        return bins_point(raw)
     if raw.ndim == 2 and raw.shape[1] > 1 and raw.shape[1] % 3 == 0:   # MDN: [pi(K), mu(K), sigma(K)]
         K = raw.shape[1] // 3
         pi, mu = raw[:, :K], raw[:, K:2 * K]

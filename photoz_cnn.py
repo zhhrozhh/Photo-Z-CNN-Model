@@ -81,13 +81,18 @@ def _side_e2(cin, reg=None):
     return L.Dense(64, activation='relu', kernel_regularizer=reg, name='se2_dense')(s)   # -> 64
 
 
-VALID_ARCHS = (None, 'default', 'side-e1', 'side-e2', 'extend')
+VALID_ARCHS = (None, 'default', 'side-e1', 'side-e2', 'extend', 'bins')
 
 
-def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None, mdn=0):
+def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None, mdn=0, bins=180):
     if arch not in VALID_ARCHS:
         raise ValueError(f"unknown arch {arch!r}; choose from {VALID_ARCHS} "
                          f"(None/'default' = trunk only)")
+    if arch == 'bins':
+        if mdn:
+            raise ValueError("arch='bins' replaces the head; mdn must be 0")
+        if bins < 32:
+            raise ValueError("bins must be >= 32 (eval.mdn_point detects the bins head by width)")
     reg = regularizers.l2(l2) if l2 else None
     inp = Input(shape=input_shape, name='cutout')
     # side-e2: the input is 9-ch color-feat+p99 [5 p99 bands | 4 arcsinh colours]; the trunk sees the
@@ -139,14 +144,17 @@ def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, ar
         x = L.Concatenate(name='head_concat')([x, _side_e2(color_in, reg)])  # 64 + 64 = 128
         x = L.Dense(64, activation='relu', kernel_regularizer=reg, name='fuse64')(x)
         x = L.Dropout(drop, name='fuse64_drop')(x)
-    if mdn:                                     # mixture-density head: K gaussians [pi, mu, sigma]
+    if arch == 'bins':                          # bin-classification head (Pasquet-style): softmax over
+        zout = L.Dense(bins, activation='softmax', name='z')(x)   # uniform log1p(z) bins; point = E[z]
+    elif mdn:                                   # mixture-density head: K gaussians [pi, mu, sigma]
         pi = L.Dense(mdn, activation='softmax', name='mdn_pi')(x)
         mu = L.Dense(mdn, name='mdn_mu')(x)
         sig = L.Dense(mdn, activation='exponential', name='mdn_sigma')(x)
         zout = L.Concatenate(name='z')([pi, mu, sig])          # (3*mdn,)
     else:
         zout = L.Dense(1, name='z')(x)
-    nm = 'photoz_cnn' + (f'-{arch}' if arch and arch != 'default' else '') + (f'-mdn{mdn}' if mdn else '')
+    nm = ('photoz_cnn' + (f'-bins{bins}' if arch == 'bins' else f'-{arch}' if arch and arch != 'default' else '')
+          + (f'-mdn{mdn}' if mdn else ''))
     return Model(inp, zout, name=nm)
 
 
@@ -331,9 +339,30 @@ def mdn_nll(num_gaussians):
     return loss
 
 
-def compile_model(model, lr=3e-4, mdn=0):
+def bins_ce(n_bins, smooth=1.0):
+    """Cross-entropy of a bins-head softmax vs the true log1p(z), binned over
+    [eval.BINS_LO, eval.BINS_HI]. smooth > 0 spreads the target over neighbouring bins with a
+    Gaussian of sigma = smooth * bin_width (soft labels); smooth=0 is a hard one-hot."""
+    centers = tf.constant(ev.bin_centers(n_bins), tf.float32)          # (B,)
+    width = (ev.BINS_HI - ev.BINS_LO) / n_bins
+
+    def loss(y_true, y_pred):
+        y = tf.expand_dims(tf.cast(y_true, tf.float32), 1)             # (batch,1) log1p(z)
+        if smooth:
+            t = tf.exp(-0.5 * ((y - centers) / (smooth * width)) ** 2)  # (batch, B) soft target
+        else:
+            idx = tf.cast((y[:, 0] - ev.BINS_LO) / width, tf.int32)
+            t = tf.one_hot(tf.clip_by_value(idx, 0, n_bins - 1), n_bins)
+        t = t / (tf.reduce_sum(t, axis=1, keepdims=True) + 1e-12)
+        return tf.reduce_mean(-tf.reduce_sum(t * tf.math.log(y_pred + 1e-8), axis=1))
+    return loss
+
+
+def compile_model(model, lr=3e-4, mdn=0, bins=0, bins_smooth=1.0):
     if mdn:                                          # NLL loss; no 'mae' (meaningless on mixture params)
         model.compile(optimizer=tf.keras.optimizers.Adam(lr), loss=mdn_nll(mdn))
+    elif bins:                                       # soft-label CE over the log1p(z) bins
+        model.compile(optimizer=tf.keras.optimizers.Adam(lr), loss=bins_ce(bins, bins_smooth))
     else:
         model.compile(optimizer=tf.keras.optimizers.Adam(lr),
                       loss=tf.keras.losses.Huber(delta=0.02), metrics=['mae'])
@@ -372,7 +401,7 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
           batch=256, lr=3e-4, min_lr=1e-5, epochs=50, l2=1e-4, drop=0.4, patience=8,
           preproc='zscore', preproc_scale=1000.0, arch=None,
           run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI,
-          val_csv=ev.DEFAULT_VAL_CSV, tta=False, mdn=0, pretrain=0):
+          val_csv=ev.DEFAULT_VAL_CSV, tta=False, mdn=0, bins=180, bins_smooth=1.0, pretrain=0):
     """Load data into RAM, train, evaluate on the val set (val_csv; default the fixed 50k), and (if a
     token is given) log everything to MLflow — INCLUDING the outlier objids on it as artifacts.
     Returns (metrics, model).
@@ -387,13 +416,17 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
     Xes, _ = load_into_ram(es_idx, crop, data_dir, z_all); zes = z_all[es_idx]
     print(f'train {Xtr.shape} ({Xtr.nbytes / 1e9:.1f} GB float16)')
 
-    model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop, arch=arch, mdn=mdn), lr=lr, mdn=mdn)
+    bins_on = bins if arch == 'bins' else 0                  # bins head only under arch='bins'
+    model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop, arch=arch, mdn=mdn, bins=bins),
+                          lr=lr, mdn=mdn, bins=bins_on, bins_smooth=bins_smooth)
     if pretrain:                                         # optional self-supervised backbone pretraining
         ssl_pretrain(model, Xtr, pp_tf, epochs=pretrain, batch=batch)
     train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch, preprocess=pp_tf)
     es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512, preprocess=pp_tf)
+    loss_name = (f'mdn_nll(K={mdn})' if mdn else
+                 f'bins_ce(B={bins},smooth={bins_smooth})' if bins_on else 'huber(0.02)')
     config = dict(crop=crop, batch=batch, lr=lr, min_lr=min_lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
-                  optimizer='adam', loss=(f'mdn_nll(K={mdn})' if mdn else 'huber(0.02)'), mdn=mdn, pretrain=pretrain, target='log1p(z)',
+                  optimizer='adam', loss=loss_name, mdn=mdn, bins=bins_on, pretrain=pretrain, target='log1p(z)',
                   preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
                   arch=(arch or 'default'),
                   train_csv=str(train_csv), val_csv=str(val_csv), tta=tta,
