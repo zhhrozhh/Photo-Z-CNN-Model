@@ -1,8 +1,12 @@
-# Post-bootcamp research report — chasing σMAD 0.01
+# Post-bootcamp research report — chasing σMAD 0.01, image-only
 
 Independent continuation of the CNN redshift model from **Macrocosm** (Le Wagon batch 2301
-final project). Goal: push photometric-redshift accuracy on SDSS from the bootcamp result
-(σMAD 0.0118) to the published benchmark of **σMAD ≈ 0.01** (Pasquet et al. 2019: 0.0091).
+final project). Goal: push photometric-redshift accuracy on SDSS toward the published
+image-only benchmark of **σMAD ≈ 0.01** (Pasquet et al. 2019: 0.0091).
+
+**Scope: image-only.** Every model here predicts redshift from the 24×24×5 ugriz cutout
+alone — no catalog features at inference. (Catalog values appear only as *training targets*
+of the pretext task in experiment 3.)
 
 *Last updated: 2026-07-23.*
 
@@ -16,27 +20,18 @@ Fixed for every experiment — numbers are directly comparable:
 - **Metric**: Δz = (z_pred − z_true)/(1 + z_true);
   σMAD = 1.4826·median(|Δz − median(Δz)|); outlier = mean(|Δz| > 0.05). See `eval.py`.
 
-## Leaderboard
+## Leaderboard (image-only)
 
-`tab16` = the 16 engineered catalog features fed directly to the head (NaN-native, no
-imputation) — those rows need catalog data at inference. "image" rows need the cutout only.
+| # | Model | σMAD | outlier | Notes |
+|---|-------|------|---------|-------|
+| 1 | frozen v4 CNN, its own MDN head | 0.01263 | 1.15% | bootcamp model, baseline |
+| 2 | HGB head on frozen MDN embedding | 0.01227 | 1.19% | head swap, same features |
+| 3 | **bins-head CNN** (`arch='bins'`, +TTA) | **0.01192** | 1.07% | run `bins180-v1` — **current best** |
+| 4 | HGB [bins emb + MDN emb] | 0.01204 | 1.11% | |
+| 5 | HGB [bins + MDN + tab-pretext emb] | 0.01202 | **1.04%** | best embedding-head combo |
+| 6 | HGB [bins + MDN + tab-pretext emb + bins-PDF] | 0.01201 | 1.08% | PDF adds nothing |
 
-| # | Model | Inputs | σMAD | outlier | Notes |
-|---|-------|--------|------|---------|-------|
-| | *bootcamp tabular baseline (3-base stack)* | catalog | 0.0127 | 1.35% | reference |
-| | *bootcamp fusion (MLP+MDN over base+mask+emb)* | image+catalog | 0.0118 | ~1.1% | reference |
-| 1 | frozen v4 CNN, its own MDN head | image | 0.01263 | 1.15% | baseline being improved |
-| 2 | HGB head on frozen MDN embedding | image | 0.01227 | 1.19% | head swap, same features |
-| 3 | HGB [MDN emb + tab16] | image+catalog | 0.01132 | 0.97% | first sub-fusion result |
-| 4 | **bins-head CNN** (`arch='bins'`, +TTA) | image | 0.01192 | 1.07% | run `bins180-v1` |
-| 5 | HGB [bins emb + MDN emb] | image | 0.01204 | 1.11% | |
-| 6 | **HGB [bins + MDN + tab-pretext emb]** | image | **0.01202** | 1.04% | **best image-only** |
-| 7 | HGB [bins emb + tab16] | image+catalog | 0.01130 | 0.99% | |
-| 8 | **HGB [bins + MDN + tab-pretext emb + tab16]** | image+catalog | **0.01116** | **0.89%** | **current best** |
-
-Progress: 0.0118 → **0.01116** (−5.4%); image-only: 0.01263 → 0.01202 (−4.8%).
-Remaining gap to 0.01: ~12%. NB the pure-image Pasquet benchmark (0.0091) is properly
-compared against the "image" rows.
+Progress: **0.01263 → 0.01192** (−5.6%). Remaining gap to Pasquet: ~24%.
 
 ## Experiments
 
@@ -50,10 +45,6 @@ a gradient-boosted tree over the same frozen 64-d embedding:
 - tree output is bounded by construction — the extrapolation failure mode is structurally gone;
 - fit time ~10 s on CPU, so head iteration became free.
 
-Adding the 16 raw tabular features (HGB handles NaN natively — no imputation, no presence
-mask, no 700 MB base-model stack) reached 0.01132, already beating the bootcamp fusion with
-a far simpler serving path: `CNN embedding + one HGB`.
-
 ### 2. Bin-classification head (`arch='bins'`)
 
 Pasquet-style reformulation, implemented in `photoz_cnn.py` (`arch='bins'`) and trained with
@@ -64,52 +55,57 @@ Pasquet-style reformulation, implemented in `photoz_cnn.py` (`arch='bins'`) and 
   the softmax — bounded by construction;
 - 8-view dihedral TTA at eval.
 
-Image-only result: **0.01263 → 0.01192**, first sub-0.012 pure-image model, out of the box
-(no tuning). Its embedding is also better food for the HGB head than the MDN one
-(0.01216 vs 0.01227), and the two embeddings are complementary (dual: 0.01204).
+Result: **0.01263 → 0.01192**, first sub-0.012 image-only model, out of the box (no
+tuning). Its embedding is also better food for the HGB head than the MDN one (0.01216 vs
+0.01227), and the two embeddings are complementary (dual: 0.01204).
 
 ### 3. Tab-feature pretext CNN (`tab_cnn.py`)
 
 A CNN that predicts the **16 tabular features from the image** (per-feature 2-Gaussian MDN
 heads, NaN-masked NLL, targets z-scored and winsorized) — distilling catalog
-photometry/morphology into the same 64-d embedding interface. Run `tab-mdn-v1`,
-`train_tab_cnn.ipynb`.
+photometry/morphology into the same 64-d embedding interface, while keeping inference
+image-only. Run `tab-mdn-v1`, `train_tab_cnn.ipynb`.
 
-As predicted for a pretext task: nearly useless alone (0.0169), redundant next to the real
-tab16 (0.01271 ≈ tabular baseline) — but **worth ~1% inside combinations**, acting as
-image-derived photometry free of catalog measurement noise:
+| Embedding combination (HGB head) | σMAD | outlier |
+|---|---|---|
+| tab-pretext emb alone | 0.01690 | 2.75% |
+| bins + MDN emb | 0.01204 | 1.11% |
+| bins + MDN + tab-pretext emb | 0.01202 | 1.04% |
+| bins + MDN + tab-pretext emb + bins-PDF(180) | 0.01201 | 1.08% |
 
-| Combination | Inputs | σMAD | outlier |
-|---|---|---|---|
-| bins + MDN + tab-pretext emb | image | 0.01202 | 1.04% |
-| bins emb + tab16 | image+catalog | 0.01130 | 0.99% |
-| bins + tab-pretext emb + tab16 | image+catalog | 0.01120 | 0.89% |
-| bins + MDN + tab-pretext emb + tab16 | image+catalog | **0.01116** | **0.89%** |
+Alone it is weak (it learns photometry, not z — expected for a pretext task). In
+combination it trims the outlier rate (1.11% → 1.04%) but moves σMAD only marginally, and
+adding the bins model's 180-d softmax PDF adds nothing the embeddings didn't already carry.
 
-The MDN embedding is nearly retired: dropping it costs only 0.00004.
+### Where the embedding-head line plateaus
+
+All embedding-head combinations converge to σMAD ≈ 0.0120 — and none of them beats the
+bins CNN's own head (0.01192). Conclusion: with a single trunk's information, the
+end-to-end trained head already extracts what there is; stacked frozen-embedding heads
+mainly help the outlier tail. The information bottleneck is the trunk/embedding, not the
+head.
 
 ## Findings
 
-1. **Bounded heads beat parametric density heads** on this problem, twice over: bins-CE
-   beats MDN as a CNN head, and HGB beats both as an embedding head. Both also eliminate
-   the expm1-extrapolation failure mode.
-2. **Embedding diversity pays**: embeddings trained toward different targets (z-regression,
-   z-classification, tabular reconstruction) are complementary; concatenating them into one
-   HGB is the cheapest ensemble available (~1 min CPU per experiment).
-3. **The head is no longer the bottleneck**: every +tab16 combination saturates at
-   σMAD ≈ 0.0112 regardless of which embeddings enter. Further gains must come from
-   embedding quality (bigger/longer-trained trunks, multi-seed ensembles, larger cutouts)
-   rather than head engineering.
+1. **Bounded heads beat parametric density heads**: bins-CE beats MDN as a CNN head
+   (−5.6%), and HGB beats MDN over frozen embeddings (−3%). Both also eliminate the
+   expm1-extrapolation failure mode that once produced z ~ 10¹⁴.
+2. **Pretext embeddings are complementary but small**: embeddings trained toward different
+   targets (z-regression, z-classification, tabular reconstruction) combine to the best
+   outlier rate (1.04%), but σMAD gains are marginal once the bins embedding is present.
+3. **The head is no longer the bottleneck** — every combination plateaus at ~0.0120 while
+   the bins CNN sits at 0.01192. Further gains must come from the trunk: capacity, training
+   recipe, ensembling, and cutout size.
 
 ## Next steps
 
-1. **Multi-seed bins ensemble** — retrain `arch='bins'` with 2–4 seeds, concatenate
-   embeddings into the HGB stack (expected: break 0.011).
-2. More pretext targets (raw magnitudes, shape parameters) to keep stacking complementary
-   embeddings.
-3. Larger cutouts (32/64 px) — the strongest literature lever; requires re-cutting shards
-   and a HiRAM runtime.
-4. Bins-head hyperparameters (`bins`, `bins_smooth`, `arch='extend'` trunk) — untouched so far.
+1. **Multi-seed bins ensemble** — retrain `arch='bins'` with 2–4 seeds, average predictions
+   (and/or concatenate embeddings). The standard next ~3–5%.
+2. **Bins-head hyperparameters** — `bins`, `bins_smooth`, longer training, `arch='extend'`
+   trunk; entirely untuned so far.
+3. **Larger cutouts (32/64 px)** — the strongest literature lever (Pasquet used 64 px);
+   requires re-cutting shards and a HiRAM runtime.
+4. More pretext targets (raw magnitudes, shape parameters) if the ensemble line stalls.
 
 ## Infrastructure
 
