@@ -26,19 +26,19 @@ N_FEAT, K = 16, 2
 
 
 # ============================== model ==============================
-def build_tab_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1):
-    """photoz trunk -> embedding(64) -> per-feature 2-Gaussian MDN heads -> (16, 6)."""
+def build_tab_cnn(input_shape, n_feat=N_FEAT, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1):
+    """photoz trunk -> embedding(64) -> per-feature 2-Gaussian MDN heads -> (n_feat, 6)."""
     base = build_cnn(input_shape, embed_dim=embed_dim, l2=l2, drop=drop, spatial_drop=spatial_drop)
     x = base.get_layer('embedding_drop').output           # (B, 64) post-dropout embedding
-    pi = L.Reshape((N_FEAT, K), name='tab_pi_r')(L.Dense(N_FEAT * K, name='tab_pi')(x))
+    pi = L.Reshape((n_feat, K), name='tab_pi_r')(L.Dense(n_feat * K, name='tab_pi')(x))
     pi = L.Softmax(axis=-1, name='tab_pi_sm')(pi)
-    mu = L.Reshape((N_FEAT, K), name='tab_mu_r')(L.Dense(N_FEAT * K, name='tab_mu')(x))
-    sig = L.Reshape((N_FEAT, K), name='tab_sig_r')(L.Dense(N_FEAT * K, name='tab_sig')(x))
-    sig = L.Lambda(lambda t: tf.nn.softplus(t) + 1e-3, output_shape=(N_FEAT, K),
+    mu = L.Reshape((n_feat, K), name='tab_mu_r')(L.Dense(n_feat * K, name='tab_mu')(x))
+    sig = L.Reshape((n_feat, K), name='tab_sig_r')(L.Dense(n_feat * K, name='tab_sig')(x))
+    sig = L.Lambda(lambda t: tf.nn.softplus(t) + 1e-3, output_shape=(n_feat, K),
                    name='tab_sig_sp')(sig)   # stable, floored sigma; output_shape so load_model works
     # (exponential blows up in the first batches -> 1e10 NLL spikes; softplus+floor is tame)
-    out = L.Concatenate(axis=-1, name='tab')([pi, mu, sig])   # (B, 16, 6)
-    return Model(base.input, out, name=f'tab_cnn-mdn{K}x{N_FEAT}')
+    out = L.Concatenate(axis=-1, name='tab')([pi, mu, sig])   # (B, n_feat, 6)
+    return Model(base.input, out, name=f'tab_cnn-mdn{K}x{n_feat}')
 
 
 def tab_mdn_nll():
@@ -73,7 +73,7 @@ def standardize(Y, train_rows, clip=10.0):
 
 
 def tab_dataset(X, Y, training=False, batch=256, shuffle_buf=50000, preprocess=None):
-    """ram_dataset variant with a (N,16) float target (NaN allowed)."""
+    """ram_dataset variant with a (N,n_feat) float target (NaN allowed)."""
     n, H, W = len(X), X.shape[1], X.shape[2]
     ds = tf.data.Dataset.range(n)
     if training:
@@ -83,7 +83,7 @@ def tab_dataset(X, Y, training=False, batch=256, shuffle_buf=50000, preprocess=N
     def gather(i):
         xb = tf.numpy_function(lambda ii: X[ii].astype('float16'), [i], tf.float16)
         yb = tf.numpy_function(lambda ii: Y[ii].astype('float32'), [i], tf.float32)
-        xb.set_shape([None, H, W, 5]); yb.set_shape([None, N_FEAT])
+        xb.set_shape([None, H, W, 5]); yb.set_shape([None, Y.shape[1]])
         return xb, yb
 
     ds = ds.map(gather, num_parallel_calls=tf.data.AUTOTUNE)
@@ -97,15 +97,21 @@ def tab_dataset(X, Y, training=False, batch=256, shuffle_buf=50000, preprocess=N
 # ============================== entry point ==============================
 def train_tab(data_dir, crop=24, train_csv=None, N=None, seed=0, es_size=5000,
               batch=256, lr=3e-4, min_lr=1e-5, epochs=50, l2=1e-4, drop=0.4, patience=8,
-              preproc='p99', run_name='tab-mdn', mlflow_token=None,
+              preproc='p99', features=None, run_name='tab-mdn', mlflow_token=None,
               experiment='tab-cnn', mlflow_uri=MLFLOW_URI):
     """Train the tab-feature pretext CNN. Early-stops on val (masked) NLL.
+    features: list of TAB_FEATURES names to train on (None = all 16).
     Returns (history, model, (feat_mean, feat_std))."""
     from photoz_cnn import make_preprocess
     train_csv = train_csv or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                           'splits', 'v4-5-train.csv')
     pp_tf = make_preprocess(preproc)
     cat, z_all, o2i, Y = tab_targets(data_dir)
+    features = list(features) if features else list(fu.TAB_FEATURES)
+    f_idx = [fu.TAB_FEATURES.index(f) for f in features]      # KeyError-by-ValueError on typos
+    Y = Y[:, f_idx]
+    n_feat = len(f_idx)
+    print(f'targets ({n_feat}): {features}')
     idx = resolve_train_index(train_csv, data_dir, o2i, N, seed)
     es_idx, train_idx = idx[:es_size], idx[es_size:]
     Y_std, f_mean, f_std = standardize(Y, train_idx)
@@ -115,7 +121,7 @@ def train_tab(data_dir, crop=24, train_csv=None, N=None, seed=0, es_size=5000,
     print(f'train {Xtr.shape} ({Xtr.nbytes / 1e9:.1f} GB float16) | '
           f'target NaN frac {np.mean(~np.isfinite(Y_std[train_idx])):.2e}')
 
-    model = build_tab_cnn((crop, crop, 5), l2=l2, drop=drop)
+    model = build_tab_cnn((crop, crop, 5), n_feat=n_feat, l2=l2, drop=drop)
     model.compile(optimizer=tf.keras.optimizers.Adam(lr, clipnorm=1.0), loss=tab_mdn_nll())
     train_ds = tab_dataset(Xtr, Y_std[train_idx], training=True, batch=batch, preprocess=pp_tf)
     es_ds = tab_dataset(Xes, Y_std[es_idx], training=False, batch=512, preprocess=pp_tf)
@@ -124,7 +130,8 @@ def train_tab(data_dir, crop=24, train_csv=None, N=None, seed=0, es_size=5000,
         tf.keras.callbacks.ReduceLROnPlateau('val_loss', factor=0.5, patience=3, min_lr=min_lr),
     ]
     config = dict(crop=crop, batch=batch, lr=lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
-                  loss=f'tab_mdn_nll(K={K}x{N_FEAT}, masked)', target='16 tab features (z-scored)',
+                  loss=f'tab_mdn_nll(K={K}x{n_feat}, masked)',
+                  target=f'{n_feat} tab features (z-scored)', features=','.join(features),
                   preproc=preproc, augment='rot90+flip', train_csv=str(train_csv),
                   n_train=len(train_idx), params=int(model.count_params()))
 
