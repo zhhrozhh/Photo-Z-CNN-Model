@@ -34,7 +34,8 @@ def build_tab_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1
     pi = L.Softmax(axis=-1, name='tab_pi_sm')(pi)
     mu = L.Reshape((N_FEAT, K), name='tab_mu_r')(L.Dense(N_FEAT * K, name='tab_mu')(x))
     sig = L.Reshape((N_FEAT, K), name='tab_sig_r')(L.Dense(N_FEAT * K, name='tab_sig')(x))
-    sig = L.Lambda(lambda t: tf.nn.softplus(t) + 1e-3, name='tab_sig_sp')(sig)  # stable, floored sigma
+    sig = L.Lambda(lambda t: tf.nn.softplus(t) + 1e-3, output_shape=(N_FEAT, K),
+                   name='tab_sig_sp')(sig)   # stable, floored sigma; output_shape so load_model works
     # (exponential blows up in the first batches -> 1e10 NLL spikes; softplus+floor is tame)
     out = L.Concatenate(axis=-1, name='tab')([pi, mu, sig])   # (B, 16, 6)
     return Model(base.input, out, name=f'tab_cnn-mdn{K}x{N_FEAT}')
