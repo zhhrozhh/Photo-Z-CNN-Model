@@ -8,7 +8,7 @@ image-only benchmark of **σMAD ≈ 0.01** (Pasquet et al. 2019: 0.0091).
 alone — no catalog features at inference. (Catalog values appear only as *training targets*
 of the pretext task in experiment 3.)
 
-*Last updated: 2026-07-23.*
+*Last updated: 2026-07-24.*
 
 ## Evaluation protocol
 
@@ -28,8 +28,9 @@ Fixed for every experiment — numbers are directly comparable:
 | 2 | HGB head on frozen MDN embedding | 0.01227 | 1.19% | head swap, same features |
 | 3 | **bins-head CNN** (`arch='bins'`, +TTA) | **0.01192** | 1.07% | run `bins180-v1` — **current best** |
 | 4 | HGB [bins emb + MDN emb] | 0.01204 | 1.11% | |
-| 5 | HGB [bins + MDN + tab-pretext emb] | 0.01202 | **1.04%** | best embedding-head combo |
+| 5 | HGB [bins + MDN + tab-pretext emb] | 0.01202 | **1.04%** | |
 | 6 | HGB [bins + MDN + tab-pretext emb + bins-PDF] | 0.01201 | 1.08% | PDF adds nothing |
+| 7 | HGB [hard + easy + bins + MDN emb] | 0.01198 | **1.04%** | best embedding-head combo |
 
 Progress: **0.01263 → 0.01192** (−5.6%). Remaining gap to Pasquet: ~24%.
 
@@ -77,13 +78,38 @@ Alone it is weak (it learns photometry, not z — expected for a pretext task). 
 combination it trims the outlier rate (1.11% → 1.04%) but moves σMAD only marginally, and
 adding the bins model's 180-d softmax PDF adds nothing the embeddings didn't already carry.
 
+**Per-feature diagnosis and the hard/easy split.** Evaluating the joint model per feature
+exposed a clear pattern: magnitudes/sizes are well predicted (R² 0.83–0.97) while the most
+z-sensitive colours are weak — u−g R² 0.59, i−z 0.73, conc_r 0.71. Hypothesis: the 5
+magnitudes dominate the shared loss. Confirmed by training two dedicated models
+(`train_tab_cnn_split.ipynb`, runs `tab-mdn-hard-v1` / `tab-mdn-easy-v1`):
+
+| Feature (hard group) | joint R² | dedicated R² | Δ |
+|---|---|---|---|
+| u−g | 0.588 | **0.826** | +0.238 |
+| i−z | 0.728 | **0.835** | +0.107 |
+| r−i | 0.861 | 0.932 | +0.071 |
+| conc_r | 0.713 | 0.787 | +0.074 |
+| petroRad / petroR90 | 0.83 | 0.85 | +0.01 |
+
+(The easy group stays flat when trained alone — it was never capacity-limited.) So the
+24 px image does carry the z-sensitive colour information; joint training was burying it.
+
+Stacking the new embeddings into the HGB head, however, converts those big R² gains into
+only a marginal σMAD move: [hard+easy+bins+MDN] = **0.01198** (best embedding-head combo;
+ablations: bins+mdn+hard 0.01198, bins+hard+easy 0.01207, adding the old joint tab
+embedding is fully redundant at 0.01200). The colour information the hard model recovered
+is largely already inside the bins embedding.
+
 ### Where the embedding-head line plateaus
 
-All embedding-head combinations converge to σMAD ≈ 0.0120 — and none of them beats the
-bins CNN's own head (0.01192). Conclusion: with a single trunk's information, the
-end-to-end trained head already extracts what there is; stacked frozen-embedding heads
-mainly help the outlier tail. The information bottleneck is the trunk/embedding, not the
-head.
+All embedding-head combinations converge to σMAD ≈ 0.0120 (best: 0.01198 with four
+embeddings) — and none of them beats the bins CNN's own head (0.01192). Even a +0.24 R²
+jump on the most z-sensitive colour (u−g, via the dedicated hard model) buys only ~0.3% of
+σMAD, because the bins embedding already encodes most of that colour signal. Conclusion:
+with a single trunk's information, the end-to-end trained head already extracts what there
+is; stacked frozen-embedding heads mainly help the outlier tail. The information bottleneck
+is the trunk/embedding, not the head.
 
 ## Findings
 
@@ -92,7 +118,10 @@ head.
    expm1-extrapolation failure mode that once produced z ~ 10¹⁴.
 2. **Pretext embeddings are complementary but small**: embeddings trained toward different
    targets (z-regression, z-classification, tabular reconstruction) combine to the best
-   outlier rate (1.04%), but σMAD gains are marginal once the bins embedding is present.
+   outlier rate (1.04%), but σMAD gains are marginal once the bins embedding is present —
+   even after the hard/easy split fixed the pretext model's weak features (u−g R²
+   0.59→0.83), σMAD only moved 0.01202→0.01198. Joint multi-task losses do bury
+   hard-but-valuable targets, though — a lesson that transfers beyond this experiment.
 3. **The head is no longer the bottleneck** — every combination plateaus at ~0.0120 while
    the bins CNN sits at 0.01192. Further gains must come from the trunk: capacity, training
    recipe, ensembling, and cutout size.
