@@ -18,20 +18,25 @@ Fixed for every experiment — numbers are directly comparable:
 
 ## Leaderboard
 
-| # | Model | σMAD | outlier | Notes |
-|---|-------|------|---------|-------|
-| | *bootcamp tabular baseline (3-base stack)* | 0.0127 | 1.35% | reference |
-| | *bootcamp fusion (MLP+MDN over base+mask+emb)* | 0.0118 | ~1.1% | reference |
-| 1 | frozen v4 CNN, its own MDN head (image-only) | 0.01263 | 1.15% | baseline being improved |
-| 2 | HGB head on frozen MDN embedding | 0.01227 | 1.19% | head swap, same features |
-| 3 | HGB [MDN emb + 16 tab features] | 0.01132 | 0.97% | first sub-fusion result |
-| 4 | **bins-head CNN** (`arch='bins'`, image-only, +TTA) | 0.01192 | 1.07% | run `bins180-v1` |
-| 5 | HGB [bins emb + MDN emb] (image-only) | 0.01204 | 1.11% | best image-only head |
-| 6 | HGB [bins emb + tab16] | 0.01130 | 0.99% | |
-| 7 | **HGB [bins + MDN + tab-pretext emb + tab16]** | **0.01116** | **0.89%** | **current best** |
+`tab16` = the 16 engineered catalog features fed directly to the head (NaN-native, no
+imputation) — those rows need catalog data at inference. "image" rows need the cutout only.
 
-Progress: 0.0118 → **0.01116** (−5.4%); image-only: 0.01263 → 0.01192 (−5.6%).
-Remaining gap to 0.01: ~12%.
+| # | Model | Inputs | σMAD | outlier | Notes |
+|---|-------|--------|------|---------|-------|
+| | *bootcamp tabular baseline (3-base stack)* | catalog | 0.0127 | 1.35% | reference |
+| | *bootcamp fusion (MLP+MDN over base+mask+emb)* | image+catalog | 0.0118 | ~1.1% | reference |
+| 1 | frozen v4 CNN, its own MDN head | image | 0.01263 | 1.15% | baseline being improved |
+| 2 | HGB head on frozen MDN embedding | image | 0.01227 | 1.19% | head swap, same features |
+| 3 | HGB [MDN emb + tab16] | image+catalog | 0.01132 | 0.97% | first sub-fusion result |
+| 4 | **bins-head CNN** (`arch='bins'`, +TTA) | image | 0.01192 | 1.07% | run `bins180-v1` |
+| 5 | HGB [bins emb + MDN emb] | image | 0.01204 | 1.11% | |
+| 6 | **HGB [bins + MDN + tab-pretext emb]** | image | **0.01202** | 1.04% | **best image-only** |
+| 7 | HGB [bins emb + tab16] | image+catalog | 0.01130 | 0.99% | |
+| 8 | **HGB [bins + MDN + tab-pretext emb + tab16]** | image+catalog | **0.01116** | **0.89%** | **current best** |
+
+Progress: 0.0118 → **0.01116** (−5.4%); image-only: 0.01263 → 0.01202 (−4.8%).
+Remaining gap to 0.01: ~12%. NB the pure-image Pasquet benchmark (0.0091) is properly
+compared against the "image" rows.
 
 ## Experiments
 
@@ -74,11 +79,12 @@ As predicted for a pretext task: nearly useless alone (0.0169), redundant next t
 tab16 (0.01271 ≈ tabular baseline) — but **worth ~1% inside combinations**, acting as
 image-derived photometry free of catalog measurement noise:
 
-| Combination | σMAD | outlier |
-|---|---|---|
-| bins emb + tab16 | 0.01130 | 0.99% |
-| bins + tab-pretext emb + tab16 | 0.01120 | 0.89% |
-| bins + MDN + tab-pretext emb + tab16 | **0.01116** | **0.89%** |
+| Combination | Inputs | σMAD | outlier |
+|---|---|---|---|
+| bins + MDN + tab-pretext emb | image | 0.01202 | 1.04% |
+| bins emb + tab16 | image+catalog | 0.01130 | 0.99% |
+| bins + tab-pretext emb + tab16 | image+catalog | 0.01120 | 0.89% |
+| bins + MDN + tab-pretext emb + tab16 | image+catalog | **0.01116** | **0.89%** |
 
 The MDN embedding is nearly retired: dropping it costs only 0.00004.
 
