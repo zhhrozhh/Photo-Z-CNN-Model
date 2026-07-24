@@ -67,12 +67,29 @@ heads, NaN-masked NLL, targets z-scored and winsorized) — distilling catalog
 photometry/morphology into the same 64-d embedding interface, while keeping inference
 image-only. Run `tab-mdn-v1`, `train_tab_cnn.ipynb`.
 
-| Embedding combination (HGB head) | σMAD | outlier |
-|---|---|---|
-| tab-pretext emb alone | 0.01690 | 2.75% |
-| bins + MDN emb | 0.01204 | 1.11% |
-| bins + MDN + tab-pretext emb | 0.01202 | 1.04% |
-| bins + MDN + tab-pretext emb + bins-PDF(180) | 0.01201 | 1.08% |
+**All embedding-head HGB results** (v4-5 val; emb names: mdn/bins = the two z-trained
+CNNs, tab = joint 16-feature pretext, hard/easy = 6/10-feature split models,
+color/morph = second-round split models, PDF = the bins CNN's 180-d softmax):
+
+| Embedding combination (HGB head) | dim | σMAD | outlier |
+|---|---|---|---|
+| mdn | 64 | 0.01227 | 1.19% |
+| bins | 64 | 0.01216 | 1.09% |
+| tab alone | 64 | 0.01690 | 2.75% |
+| bins + mdn | 128 | 0.01204 | 1.11% |
+| bins + tab | 128 | 0.01214 | 1.09% |
+| bins + hard | 128 | 0.01212 | 1.09% |
+| bins + PDF | 244 | 0.01213 | 1.12% |
+| bins + mdn + tab | 192 | 0.01202 | 1.04% |
+| bins + mdn + hard | 192 | 0.01198 | 1.09% |
+| bins + hard + easy | 192 | 0.01207 | 1.08% |
+| bins + tab + PDF | 308 | 0.01209 | 1.09% |
+| bins + mdn + tab + PDF | 372 | 0.01201 | 1.08% |
+| hard + easy + bins + mdn | 256 | **0.01198** | 1.04% |
+| hard + easy + bins + mdn + tab | 320 | 0.01200 | 1.04% |
+| bins + mdn + color + morph | 256 | **0.01198** | 1.04% |
+| bins + mdn + color + morph + easy | 320 | 0.01199 | **1.03%** |
+| all six (bins+mdn+hard+easy+color+morph) | 384 | **0.01198** | 1.05% |
 
 Alone it is weak (it learns photometry, not z — expected for a pretext task). In
 combination it trims the outlier rate (1.11% → 1.04%) but moves σMAD only marginally, and
@@ -102,12 +119,20 @@ embedding is fully redundant at 0.01200). The colour information the hard model 
 is largely already inside the bins embedding.
 
 **Split v2 closes the line.** Splitting the hard group once more into dedicated colour
-(`u-g, i-z, r-i` → runs `tab-mdn-color-v1`) and morphology (`conc_r, petroR90` →
-`tab-mdn-morph-v1`) models shows the dedication lever saturating — R² gains vs the hard-6
-model shrink to +0.008…+0.039 (only i−z still moves) — and every resulting HGB stack,
-up to all six embeddings (384-d), lands on exactly **0.01198**. Feature-prediction quality
-is no longer the constraint; the 0.0120 plateau is the hard ceiling of a single trunk's
-information.
+(`u-g, i-z, r-i` → run `tab-mdn-color-v1`) and morphology (`conc_r, petroR90` →
+`tab-mdn-morph-v1`) models shows the dedication lever saturating — only i−z still moves:
+
+| Feature | joint16 R² | hard6 R² | dedicated (v2) R² | Δ vs hard6 |
+|---|---|---|---|---|
+| u−g | 0.588 | 0.826 | 0.834 | +0.008 |
+| i−z | 0.728 | 0.835 | **0.874** | **+0.039** |
+| r−i | 0.861 | 0.932 | 0.941 | +0.009 |
+| conc_r | 0.713 | 0.787 | 0.808 | +0.021 |
+| log_petroR90_r | 0.828 | 0.842 | 0.850 | +0.008 |
+
+And every resulting HGB stack, up to all six embeddings (384-d), lands on exactly
+**0.01198** (see the table above). Feature-prediction quality is no longer the constraint;
+the 0.0120 plateau is the hard ceiling of a single trunk's information.
 
 ### Where the embedding-head line plateaus
 
