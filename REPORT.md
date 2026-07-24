@@ -101,6 +101,14 @@ ablations: bins+mdn+hard 0.01198, bins+hard+easy 0.01207, adding the old joint t
 embedding is fully redundant at 0.01200). The colour information the hard model recovered
 is largely already inside the bins embedding.
 
+**Split v2 closes the line.** Splitting the hard group once more into dedicated colour
+(`u-g, i-z, r-i` → runs `tab-mdn-color-v1`) and morphology (`conc_r, petroR90` →
+`tab-mdn-morph-v1`) models shows the dedication lever saturating — R² gains vs the hard-6
+model shrink to +0.008…+0.039 (only i−z still moves) — and every resulting HGB stack,
+up to all six embeddings (384-d), lands on exactly **0.01198**. Feature-prediction quality
+is no longer the constraint; the 0.0120 plateau is the hard ceiling of a single trunk's
+information.
+
 ### Where the embedding-head line plateaus
 
 All embedding-head combinations converge to σMAD ≈ 0.0120 (best: 0.01198 with four
